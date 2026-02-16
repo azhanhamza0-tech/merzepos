@@ -1,0 +1,546 @@
+<!DOCTYPE html>
+<html lang="ku" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Merze Perfume POS - IQD Edition</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <!-- Firebase SDKs -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-app.js";
+        import { getFirestore, collection, addDoc, getDocs, doc, updateDoc, deleteDoc, onSnapshot, query, where, setDoc, getDoc } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-firestore.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-auth.js";
+
+        const firebaseConfig = {
+            apiKey: "AIzaSyDfocxb-9Xz_U_dRow6f6dWyxXYM8QkVhI",
+            authDomain: "merze-2b8ba.firebaseapp.com",
+            projectId: "merze-2b8ba",
+            storageBucket: "merze-2b8ba.firebasestorage.app",
+            messagingSenderId: "529365448269",
+            appId: "1:529365448269:web:8b441183b055850effce04",
+            measurementId: "G-2DPNKGTD9C"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+        const auth = getAuth(app);
+        const appId = "merze-pos-v1";
+
+        // State Management
+        let cart = [];
+        let products = [];
+        let customers = [];
+        let currentUser = null;
+        let currentTab = 'pos';
+
+        // Initial Auth
+        signInAnonymously(auth).catch(console.error);
+        onAuthStateChanged(auth, (user) => {
+            if (user) {
+                currentUser = user;
+                loadProducts();
+                loadCustomers();
+                renderPosUI();
+            }
+        });
+
+        // Helper for Currency Formatting
+        const formatCurrency = (num) => {
+            return new Intl.NumberFormat('en-US').format(num) + " د.ع";
+        };
+
+        async function loadProducts() {
+            const q = collection(db, 'artifacts', appId, 'public', 'data', 'products');
+            onSnapshot(q, (snapshot) => {
+                products = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                updateCurrentView();
+            });
+        }
+
+        async function loadCustomers() {
+            const q = collection(db, 'artifacts', appId, 'public', 'data', 'customers');
+            onSnapshot(q, (snapshot) => {
+                customers = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                if (currentTab === 'customers') renderCustomersUI();
+            });
+        }
+
+        function updateCurrentView() {
+            const mainContent = document.getElementById('main-content');
+            if (currentTab === 'pos') renderPosUI();
+            else if (currentTab === 'inventory') renderInventoryUI();
+            else if (currentTab === 'reports') renderReportsUI();
+            else if (currentTab === 'customers') renderCustomersUI();
+        }
+
+        window.switchTab = (tab) => {
+            currentTab = tab;
+            document.querySelectorAll('.nav-btn').forEach(btn => {
+                btn.classList.remove('bg-purple-600', 'text-white', 'shadow-purple-900/40');
+                btn.classList.add('text-gray-400');
+            });
+            document.getElementById(`btn-${tab}`).classList.add('bg-purple-600', 'text-white', 'shadow-purple-900/40');
+            document.getElementById(`btn-${tab}`).classList.remove('text-gray-400');
+            updateCurrentView();
+        };
+
+        // --- POS UI ---
+        function renderPosUI() {
+            const mainContent = document.getElementById('main-content');
+            mainContent.innerHTML = `
+                <div class="grid grid-cols-1 lg:grid-cols-12 gap-6 h-full pb-20 lg:pb-0">
+                    <!-- Product Area -->
+                    <div class="lg:col-span-8 flex flex-col gap-4">
+                        <div class="flex flex-wrap gap-3 items-center bg-gray-900/40 p-3 rounded-2xl border border-white/5">
+                            <div class="relative flex-1 min-w-[200px]">
+                                <i data-lucide="search" class="absolute right-3 top-3 w-5 h-5 text-gray-500"></i>
+                                <input type="text" id="pos-search" placeholder="بگەڕێ بۆ کاڵا..." 
+                                    class="w-full bg-black/40 text-white pr-10 pl-4 py-3 rounded-xl border border-purple-500/20 outline-none focus:border-purple-500 transition">
+                            </div>
+                        </div>
+
+                        <div id="product-grid" class="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-4 overflow-y-auto pr-2 custom-scroll" style="max-height: calc(100vh - 180px);">
+                            ${products.length === 0 ? `
+                                <div class="col-span-full flex flex-col items-center justify-center py-20 opacity-20">
+                                    <i data-lucide="package-search" class="w-20 h-20 mb-4"></i>
+                                    <p class="text-xl">کاڵا نییە</p>
+                                </div>
+                            ` : products.map(p => `
+                                <div onclick="showSizeModal('${p.id}')" class="group bg-gray-900/60 border border-white/5 rounded-3xl p-3 cursor-pointer hover:border-purple-500/50 transition-all transform active:scale-95 shadow-lg">
+                                    <div class="relative aspect-square overflow-hidden rounded-2xl mb-3">
+                                        <img src="${p.imageUrl || 'https://images.unsplash.com/photo-1541643600914-78b084683601?q=80&w=300&auto=format&fit=crop'}" 
+                                            class="w-full h-full object-cover group-hover:scale-110 transition-transform">
+                                    </div>
+                                    <h3 class="text-white font-bold text-sm truncate px-1">${p.name}</h3>
+                                    <div class="flex justify-between items-center mt-2 px-1">
+                                        <span class="text-purple-400 font-black text-xs">${formatCurrency(p.prices[0].sellPrice)}</span>
+                                        <div class="bg-purple-600 p-1 rounded-lg">
+                                            <i data-lucide="plus" class="w-3 h-3 text-white"></i>
+                                        </div>
+                                    </div>
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>
+
+                    <!-- Cart Area -->
+                    <div class="lg:col-span-4 flex flex-col gap-4">
+                        <div class="bg-gray-900/80 backdrop-blur-xl rounded-[2.5rem] p-6 flex flex-col border border-white/5 h-full shadow-2xl overflow-hidden">
+                            <h2 class="text-xl font-black mb-6 text-white flex items-center gap-2">
+                                <i data-lucide="shopping-bag" class="text-purple-500"></i> لیستەکە
+                            </h2>
+
+                            <div id="cart-items" class="flex-1 overflow-y-auto space-y-3 pr-1 custom-scroll">
+                                ${cart.length === 0 ? `
+                                    <div class="h-full flex flex-col items-center justify-center text-gray-600 opacity-40">
+                                        <i data-lucide="shopping-cart" class="w-12 h-12 mb-2"></i>
+                                        <p>سەبەتەکە خاڵییە</p>
+                                    </div>
+                                ` : cart.map((item, idx) => `
+                                    <div class="flex items-center gap-3 bg-white/5 p-3 rounded-2xl border border-white/5">
+                                        <div class="flex-1 min-w-0">
+                                            <h4 class="text-xs font-bold text-white truncate">${item.name}</h4>
+                                            <p class="text-[10px] text-purple-400 font-bold">${item.size} • ${formatCurrency(item.price)}</p>
+                                        </div>
+                                        <div class="flex items-center gap-2 bg-black/40 rounded-xl px-2 py-1">
+                                            <button onclick="updateCartQty(${idx}, -1)" class="w-6 h-6 text-red-500 font-bold">-</button>
+                                            <span class="text-white text-xs font-bold">${item.qty}</span>
+                                            <button onclick="updateCartQty(${idx}, 1)" class="w-6 h-6 text-green-500 font-bold">+</button>
+                                        </div>
+                                        <button onclick="removeFromCart(${idx})" class="text-gray-600 hover:text-red-500">
+                                            <i data-lucide="x" class="w-4 h-4"></i>
+                                        </button>
+                                    </div>
+                                `).join('')}
+                            </div>
+
+                            <div class="mt-4 pt-4 border-t border-white/5 space-y-4">
+                                <div>
+                                    <label class="text-[10px] text-gray-500 font-bold mb-2 block uppercase">دیاریکردنی کڕیار</label>
+                                    <select id="select-customer" class="w-full bg-black/40 text-white p-3 rounded-xl border border-white/5 text-sm outline-none">
+                                        <option value="">کڕیاری گشتی</option>
+                                        ${customers.map(c => `<option value="${c.id}">${c.name}</option>`).join('')}
+                                    </select>
+                                </div>
+
+                                <div class="bg-black/40 p-4 rounded-2xl border border-white/5 space-y-2">
+                                    <div class="flex justify-between text-xs text-gray-400">
+                                        <span>کۆی فرۆشتن:</span>
+                                        <span>${formatCurrency(cart.reduce((a,c)=>a+(c.price*c.qty), 0))}</span>
+                                    </div>
+                                    <div class="flex justify-between items-center text-xs text-gray-400">
+                                        <span>داشکاندن (د.ع):</span>
+                                        <input type="number" id="discount-input" oninput="updateTotalDisplay()" value="0" 
+                                            class="w-24 bg-transparent text-right text-red-400 font-bold outline-none border-b border-white/10">
+                                    </div>
+                                    <div class="flex justify-between items-center pt-2 text-xl font-black text-white">
+                                        <span>کۆی گشتی:</span>
+                                        <span class="text-purple-500" id="total-val">${formatCurrency(calculateTotal())}</span>
+                                    </div>
+                                </div>
+
+                                <button onclick="completeSale()" class="w-full bg-purple-600 hover:bg-purple-500 text-white py-4 rounded-2xl font-black text-lg transition-all active:scale-95">
+                                    پەسەندکردن
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+            lucide.createIcons();
+            
+            document.getElementById('pos-search').addEventListener('input', (e) => {
+                const term = e.target.value.toLowerCase();
+                const cards = document.querySelectorAll('#product-grid > div');
+                cards.forEach(card => {
+                    const name = card.querySelector('h3').textContent.toLowerCase();
+                    card.style.display = name.includes(term) ? 'block' : 'none';
+                });
+            });
+        }
+
+        window.showSizeModal = (pid) => {
+            const p = products.find(x => x.id === pid);
+            const modal = document.createElement('div');
+            modal.className = "fixed inset-0 bg-black/90 backdrop-blur-xl flex items-center justify-center z-50 p-6";
+            modal.innerHTML = `
+                <div class="bg-gray-900 border border-white/10 p-8 rounded-[3rem] max-w-md w-full shadow-2xl">
+                    <div class="text-center mb-6">
+                        <img src="${p.imageUrl || ''}" class="w-24 h-24 rounded-2xl mx-auto mb-4 object-cover ring-2 ring-purple-600/30">
+                        <h2 class="text-2xl font-black text-white">${p.name}</h2>
+                    </div>
+                    <div class="grid grid-cols-1 gap-3">
+                        ${p.prices.map(pr => `
+                            <button onclick="addToCart('${p.id}', '${pr.size}', ${pr.sellPrice}, ${pr.buyPrice})" 
+                                class="bg-white/5 hover:bg-purple-600 text-white p-4 rounded-2xl flex justify-between items-center transition border border-white/5">
+                                <span class="font-bold">${pr.size}</span>
+                                <span class="font-black text-lg">${formatCurrency(pr.sellPrice)}</span>
+                            </button>
+                        `).join('')}
+                    </div>
+                    <button onclick="this.parentElement.parentElement.remove()" class="mt-6 w-full text-gray-500 font-bold">داخستن</button>
+                </div>
+            `;
+            document.body.appendChild(modal);
+        };
+
+        window.addToCart = (pid, size, sellPrice, buyPrice) => {
+            const p = products.find(x => x.id === pid);
+            const existing = cart.find(i => i.id === pid && i.size === size);
+            if (existing) existing.qty++;
+            else cart.push({ id: pid, name: p.name, size, price: sellPrice, buyPrice, qty: 1 });
+            if (document.querySelector('.fixed.inset-0')) document.querySelector('.fixed.inset-0').remove();
+            renderPosUI();
+        };
+
+        window.updateCartQty = (idx, delta) => {
+            cart[idx].qty += delta;
+            if (cart[idx].qty <= 0) cart.splice(idx, 1);
+            renderPosUI();
+        };
+
+        window.removeFromCart = (idx) => {
+            cart.splice(idx, 1);
+            renderPosUI();
+        };
+
+        window.updateTotalDisplay = () => {
+            document.getElementById('total-val').textContent = formatCurrency(calculateTotal());
+        };
+
+        function calculateTotal() {
+            const sub = cart.reduce((acc, curr) => acc + (curr.price * curr.qty), 0);
+            const disc = parseFloat(document.getElementById('discount-input')?.value || 0);
+            return (sub - disc);
+        }
+
+        window.completeSale = async () => {
+            if (cart.length === 0) return;
+            const customerId = document.getElementById('select-customer').value;
+            const discount = parseFloat(document.getElementById('discount-input').value || 0);
+            const total = calculateTotal();
+            const profit = cart.reduce((acc, curr) => acc + ((curr.price - curr.buyPrice) * curr.qty), 0) - discount;
+
+            const saleData = {
+                items: cart,
+                customerId,
+                discount,
+                total: parseFloat(total),
+                profit: parseFloat(profit),
+                timestamp: new Date().toISOString()
+            };
+
+            await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'sales'), saleData);
+            if (customerId) {
+                const cRef = doc(db, 'artifacts', appId, 'public', 'data', 'customers', customerId);
+                const cDoc = await getDoc(cRef);
+                if (cDoc.exists()) {
+                    const currentTotal = cDoc.data().totalSpent || 0;
+                    await updateDoc(cRef, { totalSpent: currentTotal + total });
+                }
+            }
+            cart = [];
+            showToast("فرۆشتن ئەنجامدرا");
+            renderPosUI();
+        };
+
+        // --- Inventory UI ---
+        function renderInventoryUI() {
+            const mainContent = document.getElementById('main-content');
+            mainContent.innerHTML = `
+                <div class="space-y-6">
+                    <div class="flex justify-between items-center bg-gray-900/40 p-6 rounded-[2rem] border border-white/5">
+                        <h2 class="text-2xl font-black text-white">کۆگا</h2>
+                        <button onclick="showProductModal()" class="bg-purple-600 text-white px-6 py-3 rounded-xl font-bold">عەتری نوێ</button>
+                    </div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                        ${products.map(p => `
+                            <div class="bg-gray-900/60 border border-white/5 p-5 rounded-[2rem] relative group">
+                                <button onclick="deleteProduct('${p.id}')" class="absolute top-4 left-4 text-red-500 opacity-0 group-hover:opacity-100 transition">
+                                    <i data-lucide="trash-2" class="w-4 h-4"></i>
+                                </button>
+                                <img src="${p.imageUrl || ''}" class="w-full h-32 object-cover rounded-xl mb-4">
+                                <h3 class="text-white font-bold">${p.name}</h3>
+                                <div class="space-y-1 mt-3">
+                                    ${p.prices.map(pr => `
+                                        <div class="flex justify-between text-[10px] bg-black/40 p-2 rounded-lg">
+                                            <span class="text-gray-400">${pr.size}</span>
+                                            <span class="text-green-400 font-bold">${formatCurrency(pr.sellPrice)}</span>
+                                        </div>
+                                    `).join('')}
+                                </div>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+            `;
+            lucide.createIcons();
+        }
+
+        window.showProductModal = () => {
+            const modal = document.createElement('div');
+            modal.className = "fixed inset-0 bg-black/95 flex items-center justify-center z-50 p-4 overflow-y-auto";
+            modal.innerHTML = `
+                <div class="bg-gray-900 border border-white/10 p-8 rounded-[3rem] max-w-lg w-full">
+                    <h2 class="text-2xl font-black text-white mb-6">زانیاری کاڵا</h2>
+                    <div class="grid grid-cols-1 gap-4 mb-6">
+                        <input type="text" id="p-name" placeholder="ناوی عەتر" class="w-full bg-white/5 text-white p-4 rounded-2xl border border-white/10 outline-none">
+                        <input type="text" id="p-brand" placeholder="براند" class="w-full bg-white/5 text-white p-4 rounded-2xl border border-white/10 outline-none">
+                        <input type="text" id="p-image" placeholder="لینکی وێنە" class="w-full bg-white/5 text-white p-4 rounded-2xl border border-white/10 outline-none">
+                    </div>
+                    <div id="size-rows" class="space-y-2 mb-6">
+                        <p class="text-xs text-gray-500 font-bold px-1 uppercase">نرخەکان (بە دینار)</p>
+                        <div class="flex gap-2 size-row">
+                            <input type="text" placeholder="قەبارە" class="bg-white/5 text-white p-3 rounded-xl border border-white/10 flex-1 outline-none text-xs">
+                            <input type="number" placeholder="کڕین" class="bg-white/5 text-white p-3 rounded-xl border border-white/10 w-24 outline-none text-xs">
+                            <input type="number" placeholder="فرۆشتن" class="bg-white/5 text-white p-3 rounded-xl border border-white/10 w-24 outline-none text-xs">
+                        </div>
+                    </div>
+                    <button onclick="addSizeRow()" class="text-purple-400 text-xs font-bold mb-6">+ زیادکردنی قەبارەی تر</button>
+                    <div class="flex gap-3">
+                        <button onclick="saveProduct()" class="flex-1 bg-purple-600 text-white py-4 rounded-2xl font-black">پاشەکەوت</button>
+                        <button onclick="this.parentElement.parentElement.parentElement.remove()" class="bg-white/5 text-gray-400 px-6 rounded-2xl">داخستن</button>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(modal);
+        };
+
+        window.addSizeRow = () => {
+            const div = document.createElement('div');
+            div.className = "flex gap-2 size-row mt-2";
+            div.innerHTML = `
+                <input type="text" placeholder="قەبارە" class="bg-white/5 text-white p-3 rounded-xl border border-white/10 flex-1 outline-none text-xs">
+                <input type="number" placeholder="کڕین" class="bg-white/5 text-white p-3 rounded-xl border border-white/10 w-24 outline-none text-xs">
+                <input type="number" placeholder="فرۆشتن" class="bg-white/5 text-white p-3 rounded-xl border border-white/10 w-24 outline-none text-xs">
+            `;
+            document.getElementById('size-rows').appendChild(div);
+        };
+
+        window.saveProduct = async () => {
+            const name = document.getElementById('p-name').value;
+            const prices = [];
+            document.querySelectorAll('.size-row').forEach(row => {
+                const inputs = row.querySelectorAll('input');
+                if (inputs[0].value && inputs[2].value) {
+                    prices.push({
+                        size: inputs[0].value,
+                        buyPrice: parseFloat(inputs[1].value || 0),
+                        sellPrice: parseFloat(inputs[2].value)
+                    });
+                }
+            });
+            if (!name || prices.length === 0) return;
+            await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'products'), {
+                name, brand: document.getElementById('p-brand').value, imageUrl: document.getElementById('p-image').value, prices, createdAt: new Date().toISOString()
+            });
+            document.querySelector('.fixed.inset-0').remove();
+        };
+
+        window.deleteProduct = async (id) => {
+            if (confirm("سڕینەوە؟")) await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'products', id));
+        };
+
+        // --- Customers UI ---
+        function renderCustomersUI() {
+            const mainContent = document.getElementById('main-content');
+            mainContent.innerHTML = `
+                <div class="space-y-6">
+                    <div class="flex justify-between items-center bg-gray-900/40 p-6 rounded-[2rem] border border-white/5">
+                        <h2 class="text-2xl font-black text-white">کڕیارەکان</h2>
+                        <button onclick="showCustomerModal()" class="bg-purple-600 text-white px-6 py-3 rounded-xl font-bold">کڕیاری نوێ</button>
+                    </div>
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                        ${customers.map(c => `
+                            <div class="bg-gray-900/60 border border-white/5 p-6 rounded-[2rem]">
+                                <h3 class="text-xl font-black text-white">${c.name}</h3>
+                                <p class="text-purple-400 font-bold text-sm">${c.phone}</p>
+                                <div class="mt-4 bg-black/40 p-3 rounded-xl">
+                                    <p class="text-[10px] text-gray-500 uppercase">کۆی کڕینەکانی</p>
+                                    <p class="text-green-400 font-black">${formatCurrency(c.totalSpent || 0)}</p>
+                                </div>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+            `;
+            lucide.createIcons();
+        }
+
+        window.showCustomerModal = () => {
+            const modal = document.createElement('div');
+            modal.className = "fixed inset-0 bg-black/95 flex items-center justify-center z-50 p-4";
+            modal.innerHTML = `
+                <div class="bg-gray-900 border border-white/10 p-8 rounded-[3rem] max-w-md w-full">
+                    <h2 class="text-2xl font-black text-white mb-6">کڕیاری نوێ</h2>
+                    <div class="space-y-4">
+                        <input type="text" id="c-name" placeholder="ناو" class="w-full bg-white/5 text-white p-4 rounded-2xl border border-white/10 outline-none">
+                        <input type="text" id="c-phone" placeholder="مۆبایل" class="w-full bg-white/5 text-white p-4 rounded-2xl border border-white/10 outline-none">
+                        <button onclick="saveCustomer()" class="w-full bg-purple-600 text-white py-4 rounded-2xl font-black">پاشەکەوت</button>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(modal);
+        };
+
+        window.saveCustomer = async () => {
+            const name = document.getElementById('c-name').value;
+            const phone = document.getElementById('c-phone').value;
+            if (!name || !phone) return;
+            await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'customers'), { name, phone, totalSpent: 0 });
+            document.querySelector('.fixed.inset-0').remove();
+        };
+
+        // --- Reports UI ---
+        async function renderReportsUI() {
+            const mainContent = document.getElementById('main-content');
+            const q = collection(db, 'artifacts', appId, 'public', 'data', 'sales');
+            const snap = await getDocs(q);
+            const sales = snap.docs.map(d => d.data());
+            
+            const totalSales = sales.reduce((a, b) => a + b.total, 0);
+            const totalProfit = sales.reduce((a, b) => a + b.profit, 0);
+
+            mainContent.innerHTML = `
+                <div class="space-y-8">
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div class="bg-gradient-to-br from-purple-600 to-indigo-900 p-8 rounded-[2.5rem] shadow-2xl">
+                            <p class="text-purple-200 text-xs font-black uppercase mb-1">کۆی فرۆش</p>
+                            <h3 class="text-4xl font-black text-white">${formatCurrency(totalSales)}</h3>
+                        </div>
+                        <div class="bg-gradient-to-br from-emerald-600 to-teal-900 p-8 rounded-[2.5rem] shadow-2xl">
+                            <p class="text-emerald-100 text-xs font-black uppercase mb-1">قازانجی خاوێن</p>
+                            <h3 class="text-4xl font-black text-white">${formatCurrency(totalProfit)}</h3>
+                        </div>
+                    </div>
+
+                    <div class="bg-gray-900/40 rounded-[2.5rem] border border-white/5 overflow-hidden">
+                        <table class="w-full text-right">
+                            <thead class="bg-black/40 text-gray-500 text-[10px] uppercase font-black">
+                                <tr>
+                                    <th class="p-6">کات</th>
+                                    <th class="p-6">کاڵا</th>
+                                    <th class="p-6">کۆی پارە</th>
+                                    <th class="p-6">قازانج</th>
+                                </tr>
+                            </thead>
+                            <tbody class="text-sm text-white">
+                                ${sales.map(s => `
+                                    <tr class="border-t border-white/5">
+                                        <td class="p-6 text-gray-500">${new Date(s.timestamp).toLocaleDateString('ku-IQ')}</td>
+                                        <td class="p-6">${s.items.map(i => i.name).join(', ')}</td>
+                                        <td class="p-6 font-black">${formatCurrency(s.total)}</td>
+                                        <td class="p-6 font-black text-green-500">${formatCurrency(s.profit)}</td>
+                                    </tr>
+                                `).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            `;
+            lucide.createIcons();
+        }
+
+        function showToast(msg) {
+            const toast = document.createElement('div');
+            toast.className = "fixed bottom-10 left-1/2 -translate-x-1/2 bg-purple-600 text-white px-8 py-3 rounded-full font-black z-[100] animate-bounce";
+            toast.textContent = msg;
+            document.body.appendChild(toast);
+            setTimeout(() => toast.remove(), 2000);
+        }
+
+        window.onload = () => lucide.createIcons();
+    </script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+Arabic:wght@400;700;900&display=swap');
+        body { font-family: 'Noto Sans Arabic', sans-serif; background-color: #050507; color: #e2e8f0; }
+        .custom-scroll::-webkit-scrollbar { width: 4px; }
+        .custom-scroll::-webkit-scrollbar-thumb { background: #3b0764; border-radius: 10px; }
+    </style>
+</head>
+<body class="h-screen flex flex-col overflow-hidden">
+
+    <header class="bg-black/60 backdrop-blur-2xl border-b border-white/5 p-4 flex justify-between items-center z-20">
+        <div class="flex items-center gap-3">
+            <div class="bg-purple-600 p-2 rounded-xl">
+                <i data-lucide="sparkles" class="text-white w-5 h-5"></i>
+            </div>
+            <h1 class="text-xl font-black text-white">MERZE <span class="text-purple-500">POS</span></h1>
+        </div>
+        <div class="text-xs text-gray-500 font-bold uppercase">IQD Edition</div>
+    </header>
+
+    <div class="flex flex-1 overflow-hidden">
+        <aside class="w-20 lg:w-64 bg-black/40 border-l border-white/5 p-4 flex flex-col gap-4">
+            <nav class="space-y-2">
+                <button id="btn-pos" onclick="switchTab('pos')" class="nav-btn w-full p-4 rounded-2xl flex items-center gap-4 bg-purple-600 text-white">
+                    <i data-lucide="layout-grid" class="w-5 h-5"></i>
+                    <span class="hidden lg:inline font-bold">فرۆشتن</span>
+                </button>
+                <button id="btn-inventory" onclick="switchTab('inventory')" class="nav-btn w-full p-4 rounded-2xl flex items-center gap-4 text-gray-400">
+                    <i data-lucide="package" class="w-5 h-5"></i>
+                    <span class="hidden lg:inline font-bold">کۆگا</span>
+                </button>
+                <button id="btn-customers" onclick="switchTab('customers')" class="nav-btn w-full p-4 rounded-2xl flex items-center gap-4 text-gray-400">
+                    <i data-lucide="users" class="w-5 h-5"></i>
+                    <span class="hidden lg:inline font-bold">کڕیارەکان</span>
+                </button>
+                <button id="btn-reports" onclick="switchTab('reports')" class="nav-btn w-full p-4 rounded-2xl flex items-center gap-4 text-gray-400">
+                    <i data-lucide="bar-chart-3" class="w-5 h-5"></i>
+                    <span class="hidden lg:inline font-bold">ڕاپۆرت</span>
+                </button>
+            </nav>
+        </aside>
+
+        <main id="main-content" class="flex-1 p-6 overflow-y-auto custom-scroll relative">
+            <div class="flex items-center justify-center h-full opacity-20">
+                <div class="w-12 h-12 border-2 border-purple-600 border-t-transparent rounded-full animate-spin"></div>
+            </div>
+        </main>
+    </div>
+
+</body>
+</html>
